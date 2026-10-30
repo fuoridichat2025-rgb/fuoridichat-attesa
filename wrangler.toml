@@ -1,0 +1,12 @@
+name = "fuoridichat-attesa"
+main = "src/index.ts"
+compatibility_date = "2024-11-18"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_id = "624bad43-ae79-4c89-b9fd-f66b4c7aeb6b"
+database_name = "fuoridichat_attesa"
