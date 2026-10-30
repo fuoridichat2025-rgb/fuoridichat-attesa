@@ -10,18 +10,15 @@ export default {
     if (req.method === 'POST') {
       const body = await req.json().catch(()=>null);
       const text = body?.channel_post?.text || body?.message?.text || body?.edited_channel_post?.text || '';
-      console.log("MSG RICEVUTO:", text);
       if(!text) return new Response('ok');
       const p = parseLog(text);
-      console.log("PARSE:", JSON.stringify(p));
       if(p) await salvaUtente(p, env.DB);
       return new Response('ok');
     }
-    return new Response('FuoriDiChat Attesa Bot Online 🐢🔥 - /app per la dashboard');
+    return new Response('FuoriDiChat Attesa Bot Online');
   }
 }
 function parseLog(t){
-  // FIX ID: supporta sia #id123 che ID: 12345
   const idMain = (t.match(/#id(\d+)\b/i)|| t.match(/ID:\s*(\d+)/i) || [])[1];
   const nomeDi = (t.match(/Di: (.+?) \[/)||[])[1];
   const nomeA = (t.match(/A: (.+?) \[/)||[])[1];
@@ -66,6 +63,4 @@ async function salvaUtente(p, DB){
     if(vecchio) await DB.prepare("UPDATE utenti SET stato='bannato', motivo=?, storico=?, updated_at=? WHERE user_id=?").bind(p.motivo||'', pushStorico(vecchio, (p.tipo==='KICK'?'kick: ':'ban: ')+(p.motivo||'')), ora, p.id).run();
   }
 }
-function appHtml(){
-  return new Response(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;background:#f6f6f8;margin:0;padding:14px}h1{font-size:22px}.card{background:#fff;border-radius:18px;padding:14px;margin:12px 0;box-shadow:0 4px 16px #0001}.badge{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700}.attesa{background:#fff4c5}.dentro{background:#d6f5d6}.uscito{background:#e9e9ef}.bannato{background:#ffd1d1}.small{font-size:12px;color:#777;margin-top:6px}.search{width:100%;padding:12px;border-radius:14px;border:1px solid #ddd;margin-bottom:12px;box-sizing:border-box}</style></head><body><h1>👀 Chi deve fa' er vocale? 🎙️</h1><input id="q" class="search" placeholder="🔍 Cerca ID o nome..."><div id="list">Carico...</div><script>async function load(){const r=await fetch('/api/lista');const data=await r.json();const q=document.getElementById('q').value.toLowerCase();const f=data.filter(u=>!q||(u.display_name+u.user_id).toLowerCase().includes(q));document.getElementById('list').innerHTML=f.map(u=>{let e=u.stato==='attesa'?'⏳ In attesa vocale':u.stato==='dentro'?'✅ Dentro':u.stato==='uscito'?'🚪 Uscito':'🚷 Bannato/Kickato';let extra=u.stato==='attesa'&&u.prima_richiesta!==u.ultima_richiesta?'🤡 ATTENZIONE FURBETTO! Già visto prima<br>📅 Prima: '+new Date(u.prima_richiesta).toLocaleDateString():u.stato==='attesa'?'🆕 Prima volta ✨<br>📎 Invito da: '+(u.invito_da||'boh'):u.stato==='bannato'?'💀 Kick/Ban: '+(u.motivo||'')+'<br>Storico: '+JSON.parse(u.storico||'[]').length+' eventi':'👻 Era già stato dentro ed è uscito';return \`<div class="card"><b>🔥 \${u.display_name}</b><br><span class="small">🆔 \${u.user_id}</span><br><span class="badge \${u.stato}">\${e}</span><div class="small">\${extra}</div></div>\`}).join('')||'Nessuno in attesa rn 🙏';}document.getElementById('q').addEventListener('input',load);load();setInterval(load,5000);<\/script></body></html>`,{headers:{'Content-Type':'text/html'}});
-}
+function appHtml(){ return new Response(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;background:#f6f6f8;margin:0;padding:14px}h1{font-size:22px}.card{background:#fff;border-radius:18px;padding:14px;margin:12px 0;box-shadow:0 4px 16px #0001}.badge{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700}.attesa{background:#fff4c5}.dentro{background:#d6f5d6}.uscito{background:#e9e9ef}.bannato{background:#ffd1d1}.small{font-size:12px;color:#777;margin-top:6px}.search{width:100%;padding:12px;border-radius:14px;border:1px solid #ddd;margin-bottom:12px;box-sizing:border-box}</style></head><body><h1>👀 Chi deve fa' er vocale? 🎙️</h1><input id="q" class="search" placeholder="🔍 Cerca ID o nome..."><div id="list">Carico...</div><script>async function load(){const r=await fetch('/api/lista');const data=await r.json();const q=document.getElementById('q').value.toLowerCase();const f=data.filter(u=>!q||(u.display_name+u.user_id).toLowerCase().includes(q));document.getElementById('list').innerHTML=f.map(u=>{let e=u.stato==='attesa'?'⏳ In attesa vocale':u.stato==='dentro'?'✅ Dentro':u.stato==='uscito'?'🚪 Uscito':'🚷 Bannato/Kickato';let extra=u.stato==='attesa'&&u.prima_richiesta!==u.ultima_richiesta?'🤡 ATTENZIONE FURBETTO! Già visto prima<br>📅 Prima: '+new Date(u.prima_richiesta).toLocaleDateString():u.stato==='attesa'?'🆕 Prima volta ✨<br>📎 Invito da: '+(u.invito_da||'boh'):u.stato==='bannato'?'💀 Kick/Ban: '+(u.motivo||'')+'<br>Storico: '+JSON.parse(u.storico||'[]').length+' eventi':'👻 Era già stato dentro ed è uscito';return \`<div class="card"><b>🔥 \${u.display_name}</b><br><span class="small">🆔 \${u.user_id}</span><br><span class="badge \${u.stato}">\${e}</span><div class="small">\${extra}</div></div>\`}).join('')||'Nessuno in attesa rn 🙏';}document.getElementById('q').addEventListener('input',load);load();setInterval(load,5000);<\/script></body></html>`,{headers:{'Content-Type':'text/html'}}); }
