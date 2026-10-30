@@ -2,3 +2,8 @@ name = "fuoridichat-attesa"
 main = "src/index.js"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fuoridichat_attesa"
+database_id = "624bad43-ae79-4c89-b9fd-f66b4c7aeb6b"
