@@ -9,9 +9,11 @@ export default {
     }
     if (req.method === 'POST') {
       const body = await req.json().catch(()=>null);
-      const text = body?.channel_post?.text || body?.message?.text || '';
+      const text = body?.channel_post?.text || body?.message?.text || body?.edited_channel_post?.text || '';
+      console.log("MSG RICEVUTO:", text);
       if(!text) return new Response('ok');
       const p = parseLog(text);
+      console.log("PARSE:", JSON.stringify(p));
       if(p) await salvaUtente(p, env.DB);
       return new Response('ok');
     }
@@ -19,7 +21,8 @@ export default {
   }
 }
 function parseLog(t){
-  const idMain = (t.match(/#id(\d+)\b/)||[])[1];
+  // FIX ID: supporta sia #id123 che ID: 12345
+  const idMain = (t.match(/#id(\d+)\b/i)|| t.match(/ID:\s*(\d+)/i) || [])[1];
   const nomeDi = (t.match(/Di: (.+?) \[/)||[])[1];
   const nomeA = (t.match(/A: (.+?) \[/)||[])[1];
   const idA = (t.match(/A:.*?\[(\d+)\]/)||[])[1];
@@ -27,7 +30,8 @@ function parseLog(t){
   const motivo = (t.match(/Motivo: (.+?)(?:\n|•)/)||[])[1] || '';
   const approvato = (t.match(/Approvato da: (.+?) \[/)||[])[1] || '';
   const id = idA || idMain;
-  const display = nomeA || nomeDi || 'Sconosciuto';
+  const display = nomeA || nomeDi || (id ? `Utente ${id}` : 'Sconosciuto');
+  if(!id) return null;
   if (t.includes('#RICHIESTA_INGRESSO')) return { tipo: 'RICHIESTA', id, display: nomeDi||display, invito };
   if (t.includes('#INGRESSO_UTENTE')) return { tipo: 'INGRESSO', id, display, approvatoDa: approvato };
   if (t.includes('#UNMUTA')) return { tipo: 'INGRESSO', id, display };
