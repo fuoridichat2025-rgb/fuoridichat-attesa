@@ -1,66 +1,120 @@
 export default {
-  async fetch(req, env) {
-    const url = new URL(req.url);
-    await env.DB.exec(`CREATE TABLE IF NOT EXISTS utenti (user_id TEXT PRIMARY KEY, display_name TEXT, stato TEXT, prima_richiesta TEXT, ultima_richiesta TEXT, invito_da TEXT, approvato_da TEXT, motivo TEXT, storico TEXT, updated_at TEXT)`);
-    if (url.pathname === '/app' || url.pathname === '/' ) return appHtml();
-    if (url.pathname === '/api/lista') {
-      const { results } = await env.DB.prepare("SELECT * FROM utenti ORDER BY updated_at DESC LIMIT 300").all();
-      return Response.json(results);
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    
+    // CORS
+    const headers = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    if (request.method === "OPTIONS") return new Response(null, { headers });
+
+    // WEBHOOK TELEGRAM - Fase 4
+    if (url.pathname === "/webhook" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const text = body?.message?.text || body?.channel_post?.text || "";
+        
+        // Parsa i log del canale: #RICHIESTA_INGRESSO #INGRESSO_UTENTE #UNMUTA #USCITA #BAN #KICK
+        let stato = null;
+        if (text.includes("#RICHIESTA_INGRESSO")) stato = "in_attesa";
+        if (text.includes("#INGRESSO_UTENTE")) stato = "entrato";
+        if (text.includes("#UNMUTA") || text.includes("#UNMUTE")) stato = "verificato";
+        if (text.includes("#USCITA_UTENTE")) stato = "uscito";
+        if (text.includes("#BAN")) stato = "bannato";
+        if (text.includes("#KICK")) stato = "kickato";
+
+        if (stato) {
+          // Estrae user_id e username dal testo se presenti
+          const matchId = text.match(/ID:?\s*(\d+)/i);
+          const matchUser = text.match(/@(\w+)/);
+          const user_id = matchId ? matchId[1] : Date.now().toString();
+          const username = matchUser ? matchUser[1] : "sconosciuto";
+
+          await env.DB.prepare(
+            `INSERT INTO utenti (user_id, username, stato, creato_il, aggiornato_il) 
+             VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
+             ON CONFLICT(user_id) DO UPDATE SET stato=?3, username=?2, aggiornato_il=datetime('now')`
+          ).bind(user_id, username, stato).run();
+        }
+        return new Response(JSON.stringify({ ok: true, parsed: stato }), { headers });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers });
+      }
     }
-    if (req.method === 'POST') {
-      const body = await req.json().catch(()=>null);
-      const text = body?.channel_post?.text || body?.message?.text || body?.edited_channel_post?.text || '';
-      if(!text) return new Response('ok');
-      const p = parseLog(text);
-      if(p) await salvaUtente(p, env.DB);
-      return new Response('ok');
+
+    // API UTENTI - Fase 3
+    if (url.pathname === "/api/utenti") {
+      const stato = url.searchParams.get("stato") || "in_attesa";
+      const { results } = await env.DB.prepare(
+        `SELECT *, 
+         (julianday('now') - julianday(creato_il)) * 24 as ore_passate 
+         FROM utenti WHERE stato = ?1 ORDER BY creato_il DESC LIMIT 100`
+      ).bind(stato).all();
+      return new Response(JSON.stringify(results), { headers: { ...headers, "Content-Type": "application/json" } });
     }
-    return new Response('FuoriDiChat Attesa Bot Online');
+
+    // API TUTTI + STATS
+    if (url.pathname === "/api/stats") {
+      const { results } = await env.DB.prepare(
+        `SELECT stato, COUNT(*) as tot FROM utenti GROUP BY stato`
+      ).all();
+      return new Response(JSON.stringify(results), { headers: { ...headers, "Content-Type": "application/json" } });
+    }
+
+    // ESTRAZIONE RANDOM
+    if (url.pathname === "/api/esegui-estrazione") {
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM utenti WHERE stato='in_attesa' ORDER BY RANDOM() LIMIT 1`
+      ).all();
+      return new Response(JSON.stringify(results[0] || null), { headers: { ...headers, "Content-Type": "application/json" } });
+    }
+
+    // DASHBOARD APP
+    if (url.pathname === "/app" || url.pathname === "/") {
+      return new Response(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>FuoriDiChat Attesa</title>
+<style>
+body{background:#0a0a0a;color:#fff;font-family:system-ui;padding:20px}
+h1{font-size:28px} .card{background:#1a1a1a;border:1px solid #333;padding:15px;border-radius:12px;margin:10px 0}
+.badge{padding:4px 8px;border-radius:99px;font-size:12px} .in_attesa{background:#f59e0b;color:#000}
+.verificato{background:#10b981} .kickato{background:#ef4444} .entrato{background:#3b82f6}
+input{width:100%;padding:12px;background:#111;border:1px solid #333;color:#fff;border-radius:8px;margin:10px 0}
+</style>
+</head>
+<body>
+<h1>👀 Chi si deve verificare? 🎙️</h1>
+<input id="search" placeholder="Cerca @username...">
+<div id="stats"></div>
+<div id="lista">Carico...</div>
+<script>
+async function load(){
+  const res = await fetch('/api/utenti?stato=in_attesa');
+  const utenti = await res.json();
+  const statsRes = await fetch('/api/stats');
+  const stats = await statsRes.json();
+  document.getElementById('stats').innerHTML = stats.map(s=>\`<span class="badge \${s.stato}">\${s.stato}: \${s.tot}</span> \`).join('');
+  const q = document.getElementById('search').value.toLowerCase();
+  const filtrati = utenti.filter(u=>u.username.toLowerCase().includes(q));
+  document.getElementById('lista').innerHTML = filtrati.map(u=>{
+    const ore = Math.floor(u.ore_passate||0);
+    const rim = Math.max(0, 24-ore);
+    return \`<div class="card"><b>@\${u.username}</b> <span class="badge \${u.stato}">\${u.stato}</span><br>
+    <small>ID: \${u.user_id} - \${rim}h rimaste - entrato: \${u.creato_il}</small></div>\`
+  }).join('') || '<p>Nessuno in attesa</p>';
+}
+document.getElementById('search').addEventListener('input', load);
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>`, { headers: { ...headers, "Content-Type": "text/html" } });
+    }
+
+    return new Response("FuoriDiChat Attesa v2 - OK", { headers });
   }
 }
-function parseLog(t){
-  const idMain = (t.match(/#id(\d+)\b/i)|| t.match(/ID:\s*(\d+)/i) || [])[1];
-  const nomeDi = (t.match(/Di: (.+?) \[/)||[])[1];
-  const nomeA = (t.match(/A: (.+?) \[/)||[])[1];
-  const idA = (t.match(/A:.*?\[(\d+)\]/)||[])[1];
-  const invito = (t.match(/Link di: (.+?) \[/)||[])[1] || '';
-  const motivo = (t.match(/Motivo: (.+?)(?:\n|•)/)||[])[1] || '';
-  const approvato = (t.match(/Approvato da: (.+?) \[/)||[])[1] || '';
-  const id = idA || idMain;
-  const display = nomeA || nomeDi || (id ? `Utente ${id}` : 'Sconosciuto');
-  if(!id) return null;
-  if (t.includes('#RICHIESTA_INGRESSO')) return { tipo: 'RICHIESTA', id, display: nomeDi||display, invito };
-  if (t.includes('#INGRESSO_UTENTE')) return { tipo: 'INGRESSO', id, display, approvatoDa: approvato };
-  if (t.includes('#UNMUTA')) return { tipo: 'INGRESSO', id, display };
-  if (t.includes('#USCITA_UTENTE')) return { tipo: 'USCITA', id, display };
-  if (t.includes('#BAN')) return { tipo: 'BAN', id, display, motivo };
-  if (t.includes('#KICK')) return { tipo: 'KICK', id, display, motivo };
-  return null;
-}
-async function salvaUtente(p, DB){
-  if(!p.id) return;
-  const vecchio = await DB.prepare("SELECT * FROM utenti WHERE user_id=?").bind(p.id).first();
-  const ora = new Date().toISOString();
-  const pushStorico = (old, ev) => JSON.stringify([...JSON.parse(old?.storico||'[]'), {t:ora, ev}]);
-  if(p.tipo==='RICHIESTA'){
-    if(!vecchio){
-      await DB.prepare("INSERT INTO utenti (user_id, display_name, stato, prima_richiesta, ultima_richiesta, invito_da, storico, updated_at) VALUES (?,?,?,?,?,?,?,?)").bind(p.id, p.display, 'attesa', ora, ora, p.invito, pushStorico(null,'richiesta'), ora).run();
-    } else {
-      await DB.prepare("UPDATE utenti SET stato='attesa', ultima_richiesta=?, display_name=?, invito_da=?, storico=?, updated_at=? WHERE user_id=?").bind(ora, p.display, p.invito, pushStorico(vecchio,'richiesta-ritorno'), ora, p.id).run();
-    }
-  }
-  if(p.tipo==='INGRESSO'){
-    if(vecchio) {
-      await DB.prepare("UPDATE utenti SET stato='dentro', display_name=?, approvato_da=?, storico=?, updated_at=? WHERE user_id=?").bind(p.display, p.approvatoDa||'', pushStorico(vecchio,'dentro'), ora, p.id).run();
-    } else {
-      await DB.prepare("INSERT INTO utenti (user_id, display_name, stato, prima_richiesta, ultima_richiesta, approvato_da, storico, updated_at) VALUES (?,?,?,?,?,?,?,?)").bind(p.id, p.display, 'dentro', ora, ora, p.approvatoDa||'', pushStorico(null,'dentro'), ora).run();
-    }
-  }
-  if(p.tipo==='USCITA'){
-    if(vecchio) await DB.prepare("UPDATE utenti SET stato='uscito', storico=?, updated_at=? WHERE user_id=?").bind(pushStorico(vecchio,'uscito'), ora, p.id).run();
-  }
-  if(p.tipo==='KICK' || p.tipo==='BAN'){
-    if(vecchio) await DB.prepare("UPDATE utenti SET stato='bannato', motivo=?, storico=?, updated_at=? WHERE user_id=?").bind(p.motivo||'', pushStorico(vecchio, (p.tipo==='KICK'?'kick: ':'ban: ')+(p.motivo||'')), ora, p.id).run();
-  }
-}
-function appHtml(){ return new Response(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui;background:#f6f6f8;margin:0;padding:14px}h1{font-size:22px}.card{background:#fff;border-radius:18px;padding:14px;margin:12px 0;box-shadow:0 4px 16px #0001}.badge{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700}.attesa{background:#fff4c5}.dentro{background:#d6f5d6}.uscito{background:#e9e9ef}.bannato{background:#ffd1d1}.small{font-size:12px;color:#777;margin-top:6px}.search{width:100%;padding:12px;border-radius:14px;border:1px solid #ddd;margin-bottom:12px;box-sizing:border-box}</style></head><body><h1>👀 Chi deve fa' er vocale? 🎙️</h1><input id="q" class="search" placeholder="🔍 Cerca ID o nome..."><div id="list">Carico...</div><script>async function load(){const r=await fetch('/api/lista');const data=await r.json();const q=document.getElementById('q').value.toLowerCase();const f=data.filter(u=>!q||(u.display_name+u.user_id).toLowerCase().includes(q));document.getElementById('list').innerHTML=f.map(u=>{let e=u.stato==='attesa'?'⏳ In attesa vocale':u.stato==='dentro'?'✅ Dentro':u.stato==='uscito'?'🚪 Uscito':'🚷 Bannato/Kickato';let extra=u.stato==='attesa'&&u.prima_richiesta!==u.ultima_richiesta?'🤡 FURBETTO! Già visto<br>📅 Prima: '+new Date(u.prima_richiesta).toLocaleDateString():u.stato==='attesa'?'🆕 Prima volta<br>📎 Invito da: '+(u.invito_da||'boh'):u.stato==='bannato'?'💀 '+(u.motivo||''):'👻 Era già dentro';return \`<div class="card"><b>🔥 \${u.display_name}</b><br><span class="small">🆔 \${u.user_id}</span><br><span class="badge \${u.stato}">\${e}</span><div class="small">\${extra}</div></div>\`}).join('')||'Nessuno rn 🙏';}document.getElementById('q').addEventListener('input',load);load();setInterval(load,5000);<\/script></body></html>`,{headers:{'Content-Type':'text/html'}}); }
