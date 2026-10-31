@@ -1,90 +1,76 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
-    const cors = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    };
-    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
-    // WEBHOOK TELEGRAM - logga #RICHIESTA_INGRESSO ecc
-    if (url.pathname === "/webhook" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const text = body?.message?.text || body?.channel_post?.text || body?.text || JSON.stringify(body);
-        let stato = null;
-        if (text.includes("#RICHIESTA_INGRESSO")) stato = "in_attesa";
-        if (text.includes("#INGRESSO_UTENTE") || text.includes("#INGRESSO")) stato = "entrato";
-        if (text.includes("#UNMUTA") || text.includes("#UNMUTE")) stato = "verificato";
-        if (text.includes("#USCITA_UTENTE")) stato = "uscito";
-        if (text.includes("#BAN")) stato = "bannato";
-        if (text.includes("#KICK")) stato = "kickato";
-        if (!stato) return new Response(JSON.stringify({ ok: true, ignored: true }), { headers: cors });
-
-        const mId = text.match(/ID:?\s*(\d+)/i);
-        const mUser = text.match(/@(\w+)/);
-        const user_id = mId ? parseInt(mId[1]) : Date.now();
-        const display_name = mUser ? mUser[1] : "sconosciuto";
-
-        await env.DB.prepare(
-          `INSERT INTO utenti (user_id, display_name, stato, prima_richiesta, ultima_richiesta, updated_at, storico)
-           VALUES (?1, ?2, ?3, datetime('now'), datetime('now'), datetime('now'), ?4)
-           ON CONFLICT(user_id) DO UPDATE SET stato=?3, display_name=?2, ultima_richiesta=datetime('now'), updated_at=datetime('now'), storico=COALESCE(storico,'') || '\n' || ?4`
-        ).bind(user_id, display_name, stato, text.slice(0,500)).run();
-
-        return new Response(JSON.stringify({ ok: true, stato, user_id }), { headers: cors });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: cors });
-      }
-    }
-
-    // API UTENTI
-    if (url.pathname === "/api/utenti") {
-      const stato = url.searchParams.get("stato") || "in_attesa";
-      const { results } = await env.DB.prepare(
-        `SELECT *, (julianday('now') - julianday(prima_richiesta))*24 as ore_passate FROM utenti WHERE stato=?1 ORDER BY ultima_richiesta DESC LIMIT 100`
-      ).bind(stato).all();
-      return new Response(JSON.stringify(results), { headers: { ...cors, "Content-Type": "application/json" } });
-    }
-
-    if (url.pathname === "/api/stats") {
-      const { results } = await env.DB.prepare(`SELECT stato, COUNT(*) as tot FROM utenti GROUP BY stato`).all();
-      return new Response(JSON.stringify(results), { headers: { ...cors, "Content-Type": "application/json" } });
-    }
-
-    if (url.pathname === "/api/esegui-estrazione") {
-      const { results } = await env.DB.prepare(`SELECT * FROM utenti WHERE stato='in_attesa' ORDER BY RANDOM() LIMIT 1`).all();
-      return new Response(JSON.stringify(results[0]||null), { headers: { ...cors, "Content-Type": "application/json" } });
-    }
-
-    // APP DASHBOARD
-    if (url.pathname.startsWith("/app") || url.pathname === "/") {
-      return new Response(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FuoriDiChat Attesa</title>
-<style>body{background:#0a0a0a;color:#fff;font-family:system-ui;padding:18px}h1{font-size:26px}.card{background:#161616;border:1px solid #2a2a2a;padding:14px;border-radius:12px;margin:10px 0}.badge{padding:4px 8px;border-radius:99px;font-size:12px}.in_attesa{background:#f59e0b;color:#000}.entrato{background:#3b82f6}.verificato{background:#10b981}.bannato,.kickato{background:#ef4444}input,button{width:100%;padding:12px;background:#111;border:1px solid #333;color:#fff;border-radius:8px;margin:8px 0}button{background:#fff;color:#000;font-weight:700}</style>
-</head><body>
-<h1>👀 Chi deve fa' er vocale? 🎙️</h1>
-<input id="search" placeholder="Cerca @username...">
-<button onclick="load()">🔄 Aggiorna</button>
-<div id="stats" style="margin:10px 0"></div>
-<div id="lista">Carico...</div>
+    // DASHBOARD
+    if (url.pathname === "/app" || url.pathname === "/" ) {
+      return new Response(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chi deve fa' er vocale?</title>
+<style>
+body{background:#0a0a0a;color:#fff;font-family:system-ui;padding:15px}
+input{width:100%;padding:12px;border-radius:10px;border:1px solid #333;background:#1a1a1a;color:#fff;margin-bottom:12px}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:12px;margin-bottom:10px}
+.badge{background:#ff3b3b;color:#fff;padding:3px 8px;border-radius:10px;font-size:12px}
+small{color:#888}
+</style>
+</head>
+<body>
+<h2>👀 Chi deve fa' er vocale? 🎤</h2>
+<input id="q" placeholder="Cerca @username...">
+<button onclick="load()" style="width:100%;padding:10px;border-radius:10px;margin-bottom:15px">🔄 Aggiorna</button>
+<div id="list"></div>
 <script>
 async function load(){
-  const r=await fetch('/api/utenti?stato=in_attesa'); const utenti=await r.json();
-  const rs=await fetch('/api/stats'); const stats=await rs.json();
-  document.getElementById('stats').innerHTML=stats.map(s=>\`<span class="badge \${s.stato}">\${s.stato}: \${s.tot}</span> \`).join('');
-  const q=document.getElementById('search').value.toLowerCase();
-  const f=utenti.filter(u=>(u.display_name||'').toLowerCase().includes(q));
-  document.getElementById('lista').innerHTML=f.map(u=>{
-    const ore=Math.floor(u.ore_passate||0); const rim=Math.max(0,24-ore);
-    return \`<div class="card"><b>@\${u.display_name}</b> <span class="badge \${u.stato}">\${u.stato}</span><br><small>ID:\${u.user_id} - \${rim}h rimaste - prima: \${u.prima_richiesta}<br>ultima: \${u.ultima_richiesta}</small></div>\`
-  }).join('')||'<p>Nessuno in attesa - tabella vuota, collega il webhook!</p>';
+  const r = await fetch('/api/utenti'); const data = await r.json();
+  const q = document.getElementById('q').value.toLowerCase();
+  const filtered = data.filter(u => !q || (u.username && u.username.toLowerCase().includes(q)));
+  document.getElementById('list').innerHTML = '<div style="margin-bottom:10px"><span style="background:#330000;padding:5px 10px;border-radius:10px;color:#ff6666">in_attesa: '+filtered.length+'</span></div>' +
+    filtered.map(u => {
+      const prima = new Date(u.prima_richiesta);
+      const diff = Math.floor((Date.now() - prima.getTime())/1000/3600);
+      const rimaste = Math.max(0, 24 - diff);
+      return '<div class=card><b>@'+(u.username||'senza_username')+'</b> <span class=badge>in_attesa</span><br><small>ID:'+u.user_id+' - '+rimaste+'h rimaste - prima: '+u.prima_richiesta+'<br>ultima: '+u.ultima_richiesta+'</small></div>';
+    }).join('') || '<div style="text-align:center;color:#666;margin-top:30px">Nessuno in attesa ✅</div>';
 }
-document.getElementById('search').addEventListener('input',load); load(); setInterval(load,5000);
-</script></body></html>`, { headers: { ...cors, "Content-Type": "text/html" } });
+document.getElementById('q').addEventListener('input', load);
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
+      `, { headers: { "Content-Type": "text/html" }});
     }
-    return new Response("FuoriDiChat v2 OK", { headers: cors });
+
+    if (url.pathname === "/api/utenti") {
+      const { results } = await env.DB.prepare("SELECT * FROM utenti WHERE stato='in_attesa' ORDER BY prima_richiesta DESC").all();
+      return new Response(JSON.stringify(results), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }});
+    }
+
+    if (url.pathname === "/webhook" && request.method === "POST") {
+      try {
+        const update = await request.json();
+        const text = update.channel_post?.text || update.message?.text || "";
+        const idMatch = text.match(/ID:\s*(\d+)/i);
+        const userMatch = text.match(/@([a-zA-Z0-9_]+)/);
+        if (!idMatch) return new Response("no id", {status: 200});
+        const user_id = parseInt(idMatch[1]);
+        const username = userMatch ? userMatch[1] : null;
+        const lower = text.toLowerCase();
+
+        if (lower.includes("richiesta")) {
+          const now = new Date().toISOString().slice(0,19).replace("T"," ");
+          await env.DB.prepare("INSERT INTO utenti (user_id, username, stato, prima_richiesta, ultima_richiesta) VALUES (?, ?, 'in_attesa', ?, ?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, ultima_richiesta=excluded.ultima_richiesta, stato='in_attesa'").bind(user_id, username, now, now).run();
+        } else if (lower.includes("unmuta") || lower.includes("unmute") || lower.includes("kick") || lower.includes("ban") || lower.includes("sban") || lower.includes("approv")) {
+          await env.DB.prepare("DELETE FROM utenti WHERE user_id = ?").bind(user_id).run();
+        }
+        return new Response("ok", {status: 200});
+      } catch(e){ return new Response("error "+e.message, {status:500}); }
+    }
+
+    return new Response("Not found", {status: 404});
   }
 }
